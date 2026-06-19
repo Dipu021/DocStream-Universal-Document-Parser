@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DocStream — Convert documents to Markdown</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161922;
+    --border: #262b36;
+    --text: #e6e8ec;
+    --muted: #8a8f9b;
+    --accent: #5b8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header h1 span { color: var(--accent); }
+
+  .dropzone {
+    margin: 24px;
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  .dropzone.drag { border-color: var(--accent); color: var(--text); }
+  .dropzone input { display: none; }
+
+  .progress-bar {
+    height: 4px;
+    background: var(--border);
+    margin: 0 24px;
+    border-radius: 2px;
+    overflow: hidden;
+    display: none;
+  }
+  .progress-bar .fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width .2s;
+  }
+
+  .status {
+    margin: 8px 24px 0;
+    color: var(--muted);
+    font-size: 13px;
+    min-height: 18px;
+  }
+
+  .panes {
+    flex: 1;
+    display: flex;
+    gap: 16px;
+    margin: 16px 24px 24px;
+    min-height: 0;
+  }
+  .pane {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .pane-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .pane-header button {
+    background: var(--accent);
+    border: none;
+    color: white;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  textarea#markdownOutput {
+    flex: 1;
+    background: transparent;
+    color: var(--text);
+    border: none;
+    padding: 14px;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 13px;
+    resize: none;
+    outline: none;
+    line-height: 1.5;
+  }
+  #preview {
+    flex: 1;
+    padding: 14px 20px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+  #preview h1, #preview h2, #preview h3 { color: var(--accent); }
+  #preview table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  #preview th, #preview td { border: 1px solid var(--border); padding: 6px 10px; font-size: 13px; }
+  #preview code { background: var(--border); padding: 2px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Doc<span>Stream</span></h1>
+  <div class="status" id="fileLabel" style="margin:0;"></div>
+</header>
+
+<div class="dropzone" id="dropzone">
+  Drop a PDF, DOCX, PPTX, XLSX, CSV, TXT or image here — or click to browse
+  <input type="file" id="fileInput" accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv,.txt,.md,.png,.jpg,.jpeg,.tiff,.bmp">
+</div>
+
+<div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+<div class="status" id="status"></div>
+
+<div class="panes">
+  <div class="pane">
+    <div class="pane-header">
+      <span>Markdown</span>
+      <button id="downloadBtn">Download .md</button>
+    </div>
+    <textarea id="markdownOutput" placeholder="Converted markdown will stream in here..."></textarea>
+  </div>
+  <div class="pane">
+    <div class="pane-header"><span>Preview</span></div>
+    <div id="preview"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script>
+const API_BASE = "http://localhost:8000";
+
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const progressBar = document.getElementById("progressBar");
+const progressFill = document.getElementById("progressFill");
+const statusEl = document.getElementById("status");
+const fileLabel = document.getElementById("fileLabel");
+const output = document.getElementById("markdownOutput");
+const preview = document.getElementById("preview");
+const downloadBtn = document.getElementById("downloadBtn");
+
+let currentFilename = "converted";
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("drag"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+dropzone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+async function handleFile(file) {
+  currentFilename = file.name.replace(/\.[^/.]+$/, "") + ".md";
+  fileLabel.textContent = file.name;
+  output.value = "";
+  preview.innerHTML = "";
+  progressBar.style.display = "block";
+  progressFill.style.width = "0%";
+  statusEl.textContent = "Uploading...";
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
+  if (!res.ok) {
+    statusEl.textContent = "Upload failed: " + (await res.text());
+    return;
+  }
+  const { job_id } = await res.json();
+  statusEl.textContent = "Converting...";
+
+  const evtSource = new EventSource(`${API_BASE}/stream/${job_id}`);
+  evtSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.type === "chunk") {
+      output.value += (output.value ? "\n\n" : "") + data.markdown;
+      preview.innerHTML = marked.parse(output.value);
+      progressFill.style.width = `${Math.round(data.progress * 100)}%`;
+      statusEl.textContent = `Converting: ${data.section} (${Math.round(data.progress * 100)}%)`;
+    } else if (data.type === "done") {
+      statusEl.textContent = "Done.";
+      progressFill.style.width = "100%";
+      evtSource.close();
+    } else if (data.type === "error") {
+      statusEl.textContent = "Error: " + data.message;
+      evtSource.close();
+    }
+  };
+  evtSource.onerror = () => {
+    statusEl.textContent = "Connection lost.";
+    evtSource.close();
+  };
+}
+
+downloadBtn.addEventListener("click", () => {
+  const blob = new Blob([output.value], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = currentFilename;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+output.addEventListener("input", () => {
+  preview.innerHTML = marked.parse(output.value);
+});
+</script>
+
+</body>
+</html>
