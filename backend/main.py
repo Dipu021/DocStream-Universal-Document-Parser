@@ -9,7 +9,12 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from converters.router import convert_document
+# -----------------
+import pytesseract
 
+# For Docker + Render
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+# ------------------------------------
 app = FastAPI(title="DocStream")
 
 app.add_middleware(
